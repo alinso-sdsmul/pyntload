@@ -3,10 +3,7 @@ from importlib.util import module_from_spec, spec_from_loader
 
 
 #import databricks_connector
-import sys
-sys.path.append('./')
-
-import databricks_connector
+from . import databricks_connector
 
 
 #variables
