@@ -1,62 +1,85 @@
-import tempfile
-from importlib.util import module_from_spec, spec_from_loader
+import io, os, sys, types
+from IPython import get_ipython
+from nbformat import read
+from IPython.core.interactiveshell import InteractiveShell
+
+def find_notebook(fullname, path=None):
+    """find a notebook, given its fully qualified name and an optional path
+
+    This turns "foo.bar" into "foo/bar.ipynb"
+    and tries turning "Foo_Bar" into "Foo Bar" if Foo_Bar
+    does not exist.
+    """
+    name = fullname.rsplit('.', 1)[-1]
+    if not path:
+        path = ['']
+    for d in path:
+        nb_path = os.path.join(d, name + ".ipynb")
+        if os.path.isfile(nb_path):
+            return nb_path
+        # let import Notebook_Name find "Notebook Name.ipynb"
+        nb_path = nb_path.replace("_", " ")
+        if os.path.isfile(nb_path):
+            return nb_path
+
+class NotebookLoader(object):
+    """Module Loader for Jupyter Notebooks"""
+    def __init__(self, path=None):
+        self.shell = InteractiveShell.instance()
+        self.path = path
+
+    def load_module(self, fullname):
+        """import a notebook as a module"""
+        path = find_notebook(fullname, self.path)
+
+        print ("importing Jupyter notebook from %s" % path)
+
+        # load the notebook object
+        with io.open(path, 'r', encoding='utf-8') as f:
+            nb = read(f, 4)
+        # create the module and add it to sys.modules if name in sys.modules:
+        #    return sys.modules[name]
+        mod = types.ModuleType(fullname)
+        mod.__file__ = path
+        mod.__loader__ = self
+        mod.__dict__['get_ipython'] = get_ipython
+        sys.modules[fullname] = mod
+
+        # extra work to ensure that magics that would affect the user_ns
+        # actually affect the notebook module's ns
+        save_user_ns = self.shell.user_ns
+        self.shell.user_ns = mod.__dict__
+
+        try:
+            for cell in nb.cells:
+                if cell.cell_type == 'code':
+                    # transform the input to executable Python
+                    code = self.shell.input_transformer_manager.transform_cell(cell.source)
+                    # run the code in themodule
+                    exec(code, mod.__dict__)
+        finally:
+            self.shell.user_ns = save_user_ns
+        return mod
 
 
-#import databricks_connector
-from . import databricks_connector
+class NotebookFinder(object):
+    """Module finder that locates Jupyter Notebooks"""
+    def __init__(self):
+        self.loaders = {}
+
+    def find_module(self, fullname, path=None):
+        nb_path = find_notebook(fullname, path)
+        if not nb_path:
+            return
+
+        key = path
+        if path:
+            # lists aren't hashable
+            key = os.path.sep.join(path)
+
+        if key not in self.loaders:
+            self.loaders[key] = NotebookLoader(path)
+        return self.loaders[key]
 
 
-#variables
-export_error="Notebook empty"
-
-patch_func = ('patch_globals = lambda x: globals().update'
-              '({k: v for k, v in x.items() if k not in globals()})')
-
-
-
-#global vars give access to notebook content and notebook name
-def persist_notebook(base_url, access_token, scope_name, global_vars):
-    
-    #assert notebook length
-    assert len(global_vars.get('In', [])) > 1, export_error
-    
-    #extract notebook contents
-    notebook_contents= '\n\n'.join(global_vars['In'][:-1])
-    
-    #write notebook contents to temporary file
-    with tempfile.NamedTemporaryFile(delete=False) as f:
-        f.write(bytes(notebook_contents, 'utf-8'))
-
-    #get notebook name
-    notebook_name = global_vars['dbutils'].notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get().split('/')[-1]
-        
-    #persist temp file name (so that it can be accessed)
-    if assert_scope_existence(base_url, access_token, scope_name):
-    
-        add_secret(base_url, access_token, scope_name, notebook_name, f.name)   
-    
-    return True
-
-#global vars allows to extract secret value
-def import_notebook(base_url, access_token, scope_name, global_vars, notebook_name):
-    
-    #extract filename using databricks secrets
-    filename_holding_secret = global_vars['dbutils'].secrets.get(scope=scope_name, key=notebook_name)
-    
-    #extract contents
-    with open(filename_holding_secret, 'rb') as f:
-        contents = f.read().decode('utf-8')
-
-    print(contents)
-        
-    #create module
-    module = module_from_spec(spec_from_loader("doesn't matter", loader=None))
-    
-    #don't know what this does
-    exec(patch_func, module.__dict__)
-    module.patch_globals(global_vars)
-    
-    #add notebook code
-    exec(contents, module.__dict__)
-    
-    return module
+sys.meta_path.append(NotebookFinder())
