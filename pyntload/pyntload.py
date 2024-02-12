@@ -3,6 +3,8 @@ from IPython import get_ipython
 from nbformat import read
 from IPython.core.interactiveshell import InteractiveShell
 
+import pyntload.helper
+
 def find_notebook(fullname, path=None):
     """find a notebook, given its fully qualified name and an optional path
 
@@ -34,9 +36,23 @@ class NotebookLoader(object):
 
         print ("importing Jupyter notebook from %s" % path)
 
-        # load the notebook object
-        with io.open(path, 'r', encoding='utf-8') as f:
-            nb = read(f, 4)
+        # load the notebook object (depending on on databricks or not)
+        try:
+            os.environ["DATABRICKS_RUNTIME_VERSION"]
+            running_on_databricks=1
+        except:
+            running_on_databricks=0
+
+        if running_on_databricks:
+            print("on databricks")
+
+            nb = pyntload.helper.read_databricks_notebook(path)
+        else:
+            print("on local machine")
+            with io.open(path, 'r', encoding='utf-8') as f:
+                nb = read(f, 4)
+
+
         # create the module and add it to sys.modules if name in sys.modules:
         #    return sys.modules[name]
         mod = types.ModuleType(fullname)
@@ -51,12 +67,12 @@ class NotebookLoader(object):
         self.shell.user_ns = mod.__dict__
 
         try:
-            for cell in nb.cells:
-                if cell.cell_type == 'code':
-                    # transform the input to executable Python
-                    code = self.shell.input_transformer_manager.transform_cell(cell.source)
-                    # run the code in themodule
-                    exec(code, mod.__dict__)
+          for cell in nb.cells:
+            if cell.cell_type == 'code':
+                # transform the input to executable Python
+                code = self.shell.input_transformer_manager.transform_cell(cell.source)
+                # run the code in themodule
+                exec(code, mod.__dict__)
         finally:
             self.shell.user_ns = save_user_ns
         return mod
@@ -83,3 +99,7 @@ class NotebookFinder(object):
 
 
 sys.meta_path.append(NotebookFinder())
+
+
+def ho_maar(x):
+    return x+1
